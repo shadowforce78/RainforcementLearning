@@ -78,6 +78,7 @@ class AI:
         self.discount_factor = (
             0.95  # Augmenté pour donner plus d'importance aux récompenses futures
         )
+        self.last_actions = []  # Pour suivre les dernières actions
 
     def save_q_table(self):
         np.save(Q_TABLE_FILE, self.q_table)
@@ -129,16 +130,19 @@ def draw_ai_visualization(screen, ai, player, obstacles, current_state, action):
     cell_width = PLAYER_SIZE
     num_cells = WIDTH // cell_width
 
-    # Dessiner l'état actuel
-    current_cell_x = current_state * cell_width
+    # Extraire la position x de l'état (qui est maintenant un tuple)
+    current_cell_x = current_state[0] * cell_width
     pygame.draw.rect(overlay, (0, 255, 0, 100), (current_cell_x, 0, cell_width, HEIGHT))
 
     # Dessiner les valeurs de Q pour chaque état
     for x in range(num_cells):
-        state = x
+        # Pour chaque état d'obstacle (0: pas d'obstacle proche, 1: obstacle proche)
+        obstacle_state = current_state[1]  # Utiliser l'état d'obstacle actuel
+        state = (x, obstacle_state)
+
         # Valeurs Q pour cet état (Gauche et Droite)
-        q_left = ai.q_table[state, 0]
-        q_right = ai.q_table[state, 1]
+        q_left = ai.q_table[state][0]
+        q_right = ai.q_table[state][1]
 
         # Normaliser pour l'affichage
         max_q = max(abs(q_left), abs(q_right), 1)  # Éviter division par zéro
@@ -237,6 +241,10 @@ def game_episode(ai, episode_num, training_speed):
     frame_count = 0
     show_ai_view = True  # Affichage de la visualisation de l'IA
 
+    # Ajouter ces variables pour suivre les mouvements constants
+    oscillation_count = 0
+    last_action = None
+
     while running:
         frame_count += 1
         screen.fill(BLACK)
@@ -262,16 +270,33 @@ def game_episode(ai, episode_num, training_speed):
         prev_x = player.x  # Stocker la position avant mouvement
         # Choisir une action avec l'IA
         action = ai.choose_action(state)
+
+        # Détection d'oscillation (gauche-droite-gauche...)
+        if last_action is not None and action != last_action:
+            oscillation_count += 1
+        else:
+            oscillation_count = max(0, oscillation_count - 1)  # Réduire progressivement
+        last_action = action
+
         player.move(action)
 
         # Récompenses
         reward = 1  # Récompense de base pour survivre
 
+        # Détection d'oscillation excessive et pénalité
+        if oscillation_count > 5:
+            reward -= 2  # Pénaliser l'oscillation excessive
+            oscillation_count -= 1  # Réduire le compteur
+
+        # Bonus réduit pour le mouvement - pour éviter qu'il ne bouge juste pour les points
         if player.x != prev_x:
-            reward += 3  # Bonus reward augmenté pour avoir bougé
+            reward += 1  # Réduit de 3 à 1
+
+        # Initialisation de la variable collision avant la boucle des obstacles
+        collision = False
 
         # Génération des obstacles
-        if random.randint(1, 30) == 1:
+        if random.randint(1, 60) == 1:
             obstacles.append(Obstacle())
 
         # Déplacement et affichage des obstacles
@@ -283,7 +308,6 @@ def game_episode(ai, episode_num, training_speed):
             obstacle.draw()
 
             # Vérification de la collision
-            collision = False
             if (
                 obstacle.x < player.x + PLAYER_SIZE
                 and obstacle.x + OBSTACLE_SIZE > player.x
@@ -309,7 +333,18 @@ def game_episode(ai, episode_num, training_speed):
                         < PLAYER_SIZE * 1.5
                         and abs(player.y - (obstacle.y + OBSTACLE_SIZE)) < 100
                     ):
-                        reward += 5  # Récompense pour évitement actif
+                        reward += 8  # Augmenté de 5 à 8 - rendre l'évitement plus attractif
+
+                    # Bonus supplémentaire si le joueur s'éloigne activement d'un obstacle
+                    elif (
+                        obstacle.x < player.x + PLAYER_SIZE
+                        and obstacle.x + OBSTACLE_SIZE > player.x
+                    ):
+                        # L'obstacle est dans la même colonne que le joueur
+                        if (action == 0 and obstacle.x > 0) or (
+                            action == 1 and obstacle.x < WIDTH - OBSTACLE_SIZE
+                        ):
+                            reward += 5  # Bonus pour s'éloigner d'un obstacle
 
         # Obtenir le nouvel état et mettre à jour la Q-table
         next_state = ai.get_state(player, obstacles)

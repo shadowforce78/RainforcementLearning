@@ -1,3 +1,4 @@
 .qodo
 .venv
 q_table.npy
+.geoview_temp
