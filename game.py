@@ -12,10 +12,8 @@ PLAYER_SIZE = 50
 OBSTACLE_SIZE = 50
 FPS = 60
 MAX_EPISODES = 500  # Augmenté pour plus d'entraînement
-Q_TABLE_FILE = "q_table.npy"  # Fichier pour sauvegarder la Q-table
-TRAINING_SPEED = (
-    10  # Multiplicateur de vitesse (1 = normal, 2 = 2x plus rapide, etc. Max = 10)
-)
+Q_TABLE_FILE = "q_table_enhanced.npy"  # Nouveau fichier pour la Q-table améliorée
+TRAINING_SPEED = 10  # Multiplicateur de vitesse
 
 # Couleurs
 WHITE = (255, 255, 255)
@@ -55,7 +53,7 @@ class Obstacle:
     def __init__(self):
         self.x = random.randint(0, WIDTH - OBSTACLE_SIZE)
         self.y = -OBSTACLE_SIZE
-        self.speed = 5
+        self.speed = random.randint(3, 7)  # Vitesse variable des obstacles
 
     def move(self):
         self.y += self.speed
@@ -67,40 +65,54 @@ class Obstacle:
 # IA simple avec Q-Learning
 class AI:
     def __init__(self):
-        # On supprime la Q-table précédente pour repartir de zéro
-        self.q_table = np.zeros(
-            (WIDTH // PLAYER_SIZE, 3, 2)
-        )  # [position_x, obstacle_proche, action]
-        print("Nouvelle Q-table créée")
+        # Q-table avec dimensions augmentées:
+        # [position_x, obstacle_proche, vitesse_obstacle, action]
+        self.q_table = np.zeros((WIDTH // PLAYER_SIZE, 2, 3, 2))
+        print("Nouvelle Q-table améliorée créée")
 
-        self.epsilon = 0.5  # Augmenté pour plus d'exploration au début
-        self.learning_rate = 0.2  # Augmenté pour apprendre plus vite
-        self.discount_factor = (
-            0.95  # Augmenté pour donner plus d'importance aux récompenses futures
-        )
-        self.last_actions = []  # Pour suivre les dernières actions
+        self.epsilon = 0.7  # Augmenté pour favoriser encore plus l'exploration au début
+        self.learning_rate = 0.2
+        self.discount_factor = 0.95
+        self.last_actions = []
 
     def save_q_table(self):
         np.save(Q_TABLE_FILE, self.q_table)
         print("Q-table sauvegardée")
 
     def get_state(self, player, obstacles):
-        # Déterminer s'il y a un obstacle proche à éviter
-        obstacle_close = 0  # Par défaut, pas d'obstacle proche
-
+        # Par défaut, pas d'obstacle proche et vitesse moyenne
+        obstacle_close = 0
+        obstacle_speed = 1  # 0: lent, 1: moyen, 2: rapide
+        
+        # Chercher l'obstacle le plus menaçant
+        closest_obstacle = None
+        min_distance = float('inf')
+        
         for obstacle in obstacles:
-            # Si l'obstacle est dans la même colonne que le joueur et se rapproche
-            if (
-                obstacle.x < player.x + PLAYER_SIZE
-                and obstacle.x + OBSTACLE_SIZE > player.x
-            ) and obstacle.y > 0:
-                # Plus l'obstacle est proche, plus il est important
+            # Est-ce que l'obstacle est dans la trajectoire du joueur?
+            if obstacle.x < player.x + PLAYER_SIZE and obstacle.x + OBSTACLE_SIZE > player.x and obstacle.y > 0:
+                # Calculer la distance verticale
                 distance = player.y - (obstacle.y + OBSTACLE_SIZE)
-                if distance < 200:  # Si l'obstacle est à moins de 200 pixels
-                    obstacle_close = 1
-                    break
-
-        return (player.x // PLAYER_SIZE, obstacle_close)
+                
+                # Garder l'obstacle le plus proche
+                if distance > 0 and distance < min_distance:
+                    min_distance = distance
+                    closest_obstacle = obstacle
+        
+        # Si on a trouvé un obstacle menaçant
+        if closest_obstacle:
+            if min_distance < 200:
+                obstacle_close = 1
+                
+            # Catégoriser la vitesse
+            if closest_obstacle.speed <= 4:
+                obstacle_speed = 0  # Lent
+            elif closest_obstacle.speed <= 6:
+                obstacle_speed = 1  # Moyen
+            else:
+                obstacle_speed = 2  # Rapide
+                
+        return (player.x // PLAYER_SIZE, obstacle_close, obstacle_speed)
 
     def choose_action(self, state):
         if random.uniform(0, 1) < self.epsilon:
@@ -138,7 +150,8 @@ def draw_ai_visualization(screen, ai, player, obstacles, current_state, action):
     for x in range(num_cells):
         # Pour chaque état d'obstacle (0: pas d'obstacle proche, 1: obstacle proche)
         obstacle_state = current_state[1]  # Utiliser l'état d'obstacle actuel
-        state = (x, obstacle_state)
+        obstacle_speed = current_state[2]  # Utiliser l'état de vitesse actuel
+        state = (x, obstacle_state, obstacle_speed)
 
         # Valeurs Q pour cet état (Gauche et Droite)
         q_left = ai.q_table[state][0]
@@ -323,28 +336,26 @@ def game_episode(ai, episode_num, training_speed):
         if not collision:
             for obstacle in obstacles:
                 if obstacle.y > 0 and obstacle.y < HEIGHT - 100:
-                    # Si joueur évite activement un obstacle proche
-                    if (
-                        abs(
-                            player.x
-                            + PLAYER_SIZE / 2
-                            - (obstacle.x + OBSTACLE_SIZE / 2)
-                        )
-                        < PLAYER_SIZE * 1.5
-                        and abs(player.y - (obstacle.y + OBSTACLE_SIZE)) < 100
-                    ):
-                        reward += 8  # Augmenté de 5 à 8 - rendre l'évitement plus attractif
-
-                    # Bonus supplémentaire si le joueur s'éloigne activement d'un obstacle
-                    elif (
-                        obstacle.x < player.x + PLAYER_SIZE
-                        and obstacle.x + OBSTACLE_SIZE > player.x
-                    ):
+                    # Distance horizontale entre le joueur et l'obstacle
+                    horizontal_distance = abs(player.x + PLAYER_SIZE/2 - (obstacle.x + OBSTACLE_SIZE/2))
+                    # Distance verticale
+                    vertical_distance = abs(player.y - (obstacle.y + OBSTACLE_SIZE))
+                    
+                    # Évitement propre: obstacle proche mais pas de collision
+                    if horizontal_distance < PLAYER_SIZE*1.5 and vertical_distance < 150:
+                        # Plus l'obstacle est proche et rapide, plus la récompense est grande
+                        proximity_factor = max(0, (150 - vertical_distance) / 50)  # 0-3 selon la proximité
+                        speed_factor = obstacle.speed / 5  # 0.6-1.4 selon la vitesse
+                        
+                        # Récompense dynamique basée sur la difficulté d'évitement
+                        evasion_reward = 10 * proximity_factor * speed_factor
+                        reward += evasion_reward
+                        
+                    # Bonus supplémentaire pour s'éloigner d'un obstacle aligné
+                    elif (obstacle.x < player.x + PLAYER_SIZE and obstacle.x + OBSTACLE_SIZE > player.x):
                         # L'obstacle est dans la même colonne que le joueur
-                        if (action == 0 and obstacle.x > 0) or (
-                            action == 1 and obstacle.x < WIDTH - OBSTACLE_SIZE
-                        ):
-                            reward += 5  # Bonus pour s'éloigner d'un obstacle
+                        if (action == 0 and obstacle.x > 0) or (action == 1 and obstacle.x < WIDTH - OBSTACLE_SIZE):
+                            reward += 8  # Augmenté pour encourager les mouvements d'évitement
 
         # Obtenir le nouvel état et mettre à jour la Q-table
         next_state = ai.get_state(player, obstacles)
@@ -397,8 +408,8 @@ def main():
         episode += 1
 
         # Réduire epsilon progressivement mais plus lentement
-        if episode % 20 == 0:
-            ai.epsilon = max(0.05, ai.epsilon * 0.98)  # Décroissance plus lente
+        if episode % 50 == 0:  # Changé de 20 à 50 épisodes
+            ai.epsilon = max(0.1, ai.epsilon * 0.99)  # Taux de décroissance ralenti à 0.99 (était 0.98)
 
         # Jouer un épisode
         result = game_episode(ai, episode, training_speed)
