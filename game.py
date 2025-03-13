@@ -11,9 +11,9 @@ WIDTH, HEIGHT = 400, 600
 PLAYER_SIZE = 50
 OBSTACLE_SIZE = 50
 FPS = 60
-MAX_EPISODES = 1000  # Nombre d'épisodes d'entraînement
+MAX_EPISODES = 100  # Nombre d'épisodes d'entraînement
 Q_TABLE_FILE = "q_table.npy"  # Fichier pour sauvegarder la Q-table
-TRAINING_SPEED = 50  # Multiplicateur de vitesse (1 = normal, 2 = 2x plus rapide, etc. Max = 10)
+TRAINING_SPEED = 10  # Multiplicateur de vitesse (1 = normal, 2 = 2x plus rapide, etc. Max = 10)
 
 # Couleurs
 WHITE = (255, 255, 255)
@@ -36,7 +36,7 @@ class Player:
     def __init__(self):
         self.x = WIDTH // 2 - PLAYER_SIZE // 2
         self.y = HEIGHT - 100
-        self.speed = 5
+        self.speed = 10  # augmenté pour que l'IA bouge plus
 
     def move(self, direction):
         if direction == 0 and self.x > 0:
@@ -191,8 +191,7 @@ def game_episode(ai, episode_num, training_speed):
         frame_count += 1
         screen.fill(BLACK)
         
-        # Récompense par frame
-        reward = 1
+        reward = 1  # Récompense de départ par frame
 
         # Gestion des événements
         for event in pygame.event.get():
@@ -210,10 +209,12 @@ def game_episode(ai, episode_num, training_speed):
 
         # Obtenir l'état actuel
         state = ai.get_state(player)
-
+        prev_x = player.x  # Stocker la position avant mouvement
         # Choisir une action avec l'IA
         action = ai.choose_action(state)
         player.move(action)
+        if player.x != prev_x:
+            reward += 2  # Bonus reward pour avoir bougé
 
         # Génération des obstacles
         if random.randint(1, 30) == 1:
@@ -309,7 +310,19 @@ def main():
                 avg_score = sum(scores[-10:]) / 10
                 print(f"Episode {episode}, Score moyen sur les 10 derniers: {avg_score:.2f}, Vitesse: {training_speed}x")
     
-    # Sauvegarder la Q-table à la fin
+    # Compte rendu complet sur l'entraînement
+    if scores:
+        avg_score = sum(scores) / len(scores)
+        best_score = max(scores)
+        worst_score = min(scores)
+        print("\n=== Compte Rendu Complet sur l'Entrainement ===")
+        print(f"Nombre d'épisodes: {episode}")
+        print(f"Score moyen: {avg_score:.2f}")
+        print(f"Meilleur score: {best_score}")
+        print(f"Pire score: {worst_score}")
+        print(f"Epsilon final: {ai.epsilon:.4f}")
+        print("Q-table sauvegardée")
+    
     ai.save_q_table()
     pygame.quit()
 
